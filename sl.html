@@ -1,0 +1,529 @@
+﻿<!DOCTYPE html>
+<html>
+	<head>
+		<style type="text/css">
+			.SLControls {
+				float: left;
+				margin-right: 1em;
+				margin-top: 2em;
+				border: 1px solid #a0a0a0;
+				padding: 0.5em;
+			}
+			.SLControls h3 {
+				width: 10em;
+			}
+			.SLControls table {
+				border-collapse: collapse;
+			}
+			.SLControls td {
+				border: 1px solid #a0a0a0;
+			}
+			.SLControls th {
+				width: 1em;
+				border: 1px solid #a0a0a0;
+			}
+			.SLCanvas {
+				clear: both;
+//				background: #c0c0c0;
+				border: 2px solid #a0a0a0;
+				width: 500px;
+				height: 500px;
+			}
+			.SLCenter {
+				float: left;
+			}
+
+			.SLStats {
+				float: left;
+				margin-left: 1em;
+				margin-top: 2em;
+				border: 1px solid #a0a0a0;
+				padding: 0.5em;
+			}
+
+			.SLGraph {
+				width: 300px;
+				height: 200px;
+			}
+			
+			.SLDump {
+				clear: both;
+			}
+		</style>
+		<script id="Ticker" type="text/x-jquery-tmpl">
+		</script>
+		<script type="text/javascript" src="jquery.js"></script>
+		<script type="text/javascript" src="jquery-ui-1.8.14.custom.min.js"></script>
+		<script type="text/javascript" src="jquery.flot.js"></script>
+		<script type="text/javascript">
+		$(function() {
+
+		var H = {};
+		var elements = ["ul", "li", "b", "span", "td", "tr", "th", "table", "div", "input", "button", "canvas", "h3", "h6", "center", "select", "option", "textarea"];
+		var mkf = function(n) {
+			return function() {
+				var me = $(document.createElement(n));
+				for (var i = 0; i < arguments.length; i++) {
+					me.append(arguments[i]);
+				}
+				return me;
+			} 
+		};
+		for (var i in elements) {
+			H[elements[i]] = mkf(elements[i]);
+		}
+
+		
+
+		function Slider() {
+			var div = H.div();
+
+			div.slider();
+
+			return {
+				getNode: function() { return div; },
+				change: function(handler) {
+					div.unbind("slidechange").bind("slidechange",
+						function() {
+							handler($(this).slider('values', index));
+						}
+					);
+				}
+			};
+		}
+
+		var maxAge = 1;
+		var reverseColors = false;
+
+		function CanvasBlitter(canvas) {
+			var pixelWidth = 5;
+			var pixelHeight = 5;
+			var height = 500;
+			var width = 500;
+			$(canvas).css("height", height + "px");
+			$(canvas).css("width", width + "px");
+			$(canvas).attr("height", height);
+			$(canvas).attr("width", width);
+			
+			context = canvas.getContext("2d");
+			context.setTransform(1, 0, 0, 1, 0, 0);
+
+			return {
+				setPixelDimensions: function(dim) { pixelWidth = dim.width; pixelHeight = dim.height; },
+				setCanvasDimensions: function(dim) { canvas.css("height", dim.height); canvas.css("width", dim.width); },
+				blit: function(array) {
+					var x, y, c;
+					for (x = 0; x < array.length; x++) {
+						for (y = 0; y < array[x].length; y++) {
+//							c = 255 - (2*array[x][y] > 255 ? 255 : 2*array[x][y]);
+							if (reverseColors) {
+								c = Math.min(Math.floor(255 * array[x][y] / maxAge), 255);
+							} else {
+								if (maxAge < 10) {
+									c = 0;
+								}
+								c = 255 - Math.min(Math.floor(255 * array[x][y] / maxAge), 255);
+							}
+							context.fillStyle = array[x][y] ? "rgb(" + c + ", " + c + ", 255)" : "black";
+							context.fillRect(x * pixelWidth, y * pixelHeight, pixelWidth, pixelHeight);
+						}
+					}
+				}
+			};
+		}
+
+		function LifeGame() {
+			var canvas;
+			var controls;
+			var buttons = {};
+			var graphs = {};
+			var el = {};
+			el.status = {};
+			var node = H.div(controls = H.center(
+					H.h3("State Transition Probabilities"),
+					table = H.table(),
+					H.b("Load preset: "), el.presets = H.select()
+				),
+				el.center = H.div(H.div(
+					buttons.start = H.button("Start"),
+					buttons.stop = H.button("Stop"),
+					buttons.step = H.button("Step"),
+					buttons.random = H.button("Randomize!"),
+					buttons.clear = H.button("Clear"),
+					buttons.reverse = H.button("Reverse Colors"),
+					buttons.dump = H.button("Dump")
+					),
+					el.canvas = H.canvas(),
+					H.div(el.status.running = H.span(), el.status.step = H.span(), el.status.alive = H.span())
+				),
+				el.stats = H.div(
+					H.div(H.b("Neighborhood Size Distribution"), graphs.neighbors = H.div()),
+					H.div(H.b("Age Distribution"), graphs.age = H.div())
+				),
+				el.dump = H.div(el.dumpArea = H.textarea())
+			);
+			controls.addClass("SLControls");
+			el.canvas.addClass("SLCanvas");
+			el.center.addClass("SLCenter");
+			el.stats.addClass("SLStats");
+			graphs.neighbors.addClass("SLGraph");
+			graphs.age.addClass("SLGraph");
+			el.dump.addClass("SLDump");
+			el.dumpArea.attr("rows", "25");
+			el.dumpArea.attr("cols", "80");
+			el.dump.hide();
+
+			var presets = {};
+			presets["Original"] = [
+				[0, 1],
+				[0, 1],
+				[0, 0],
+				[1, 0],
+				[0, 1],
+				[0, 1],
+				[0, 1],
+				[0, 1],
+				[0, 1]
+			];
+
+			presets["Almost Deterministic"] = [
+				[0.0001, 0.9999],
+				[0.0001, 0.9999],
+				[0.0001, 0.0001],
+				[0.9999, 0.0001],
+				[0.0001, 0.9999],
+				[0.0001, 0.9999],
+				[0.0001, 0.9999],
+				[0.0001, 0.9999],
+				[0.0001, 0.9999]
+			];
+
+			presets["Maze-like?"] = [
+				[0, 1],
+				[0, 0.1],
+				[1, 0],
+				[0, 0],
+				[0, 1],
+				[0, 1],
+				[0, 1],
+				[0, 1],
+				[0, 1]
+			];
+
+			presets["Shifting Boundaries"] = [
+				[0, 0],
+				[0.5, 0],
+				[0.9, 0],
+				[0, 0.1],
+				[0.15, 1],
+				[0, 1],
+				[0, 1],
+				[0, 1],
+				[0, 1]
+			];
+			
+			presets["Blocks"] = [
+				[0, 0.5],
+				[0.2, 0],
+				[0, 0.01],
+				[0, 1],
+				[0, 1],
+				[0, 1],
+				[0, 1],
+				[0, 1],
+				[0, 1]
+			];
+
+			var probabilities = jQuery.extend(true, [], presets["Original"]);
+
+			var inputs = [];
+			var tr, input;
+			H.tr(H.th("Number of Neighbors"), H.th("Dead<br>↓<br>Alive"), H.th("Alive<br>↓<br>Dead")).appendTo(table);
+			for (var n = 0; n < 9; n++) {
+				tr = H.tr();
+				tr.appendTo(table);
+				H.th(n + "").appendTo(tr);
+				inputs[n] = [];
+				for (var s = 0; s < 2; s++) {
+					tr.append(H.td(input = H.input()));
+					input.attr("size", 1);
+					input.val(probabilities[n][s]);
+					function assign(n, s) {
+						input.change(function() {
+							var v = parseFloat(inputs[n][s].val());
+							if (!isNaN(v)) {
+								probabilities[n][s] = v;
+							} else {
+								inputs[n][s].val(probabilities[n][s]);
+							}
+						});
+					}
+					assign(n, s);
+					inputs[n][s] = input;
+				}
+			}
+
+			function setProbabilities(probs) {
+				for (var n in probs) {
+					for (var s in probs[n]) {
+						probabilities[n][s] = probs[n][s];
+						inputs[n][s].val(probs[n][s]);
+					}
+				}
+			}
+
+			function createPresetDropdown() {
+				var option;
+				for (var i in presets) {
+					option = H.option(i);
+					option.attr("value", i);
+					el.presets.append(option);
+				}
+				option = H.option("Randomize!");
+				option.attr("value", "_random");
+				el.presets.append(option);
+				el.presets.change(function() {
+					var v = $(this).val();
+					if (v == "_random") {
+						var probs = [];
+						for (var n = 0; n < 9; n++) {
+							probs[n] = [Math.random(), Math.random()];
+						}
+						setProbabilities(probs);
+					} else {
+						setProbabilities(presets[v]);
+					}
+				});
+			}
+			createPresetDropdown();
+
+			var width = 100;
+			var height = 100;
+			var arrays = [[], []];
+			var which = 0;
+			
+			var State = { Alive: 1, Dead: 0 };
+
+			for (var x = 0; x < width; x++) {
+				arrays[0][x] = [];
+				arrays[1][x] = [];
+				for (var y = 0; y < height; y++) {
+//					arrays[0][x][y] = State.Dead;
+//					arrays[1][x][y] = State.Dead;
+					arrays[0][x][y] = Math.random() < 0.5 ? State.Alive : State.Dead;
+					arrays[1][x][y] = arrays[0][x][y];
+				}
+			}
+
+			arrays[0][2][3] = State.Alive;
+			arrays[1][2][3] = State.Alive;
+
+			el.canvas.click(function(event) {
+				var x = Math.floor((event.offsetX - 2.5) / 5);
+				var y = Math.floor((event.offsetY - 2.5) / 5);
+				arrays[which][x][y] = !arrays[which][x][y] ? 1 : 0;
+				arrays[1 - which][x][y] = !arrays[1 - which][x][y] ? 1 : 0;
+				if (!running) {
+					blitter.blit(arrays[1 - which]);
+				}
+			});
+
+			var blitter = CanvasBlitter(el.canvas[0]);
+
+			blitter.blit(arrays[which]);
+
+			function getNeighbors(which, x, y) {
+				var xp = (x + 1) % width;
+				var yp = (y + 1) % height;
+				var xm = (x - 1 + width) % width;
+				var ym = (y - 1 + height) % height;
+				return !!arrays[which][xp][y] + !!arrays[which][x][yp] + !!arrays[which][xm][y] + !!arrays[which][x][ym] + !!arrays[which][xp][yp] + !!arrays[which][xm][yp] + !!arrays[which][xp][ym] + !!arrays[which][xm][ym];
+			}
+
+			function showGraphs(stats) {
+				var d = [];
+				for (var i in stats.neighbors) {
+					d[i] = [i, stats.neighbors[i]];
+				}
+				$.plot(graphs.neighbors, [{ data: d, bars: { show: true } }]);
+
+				d = [];
+				for (var i in stats.age) {
+					d[i] = [i, stats.age[i]];
+				}
+
+				var ticks = [];
+				for (var i = 0; i < 10; i++) {
+					ticks.push([i - 0.5, i * 25]);
+				}
+				ticks.push([i - 0.5, "\u221e"]);
+
+				$.plot(graphs.age,
+					[{ data: d, bars: { show: true } }],
+					{ xaxis: { ticks: ticks } }
+				);
+			}
+
+
+			var stepCount = 0;
+
+			var graphInterval = 10;
+
+			var stats = {
+				neighbors: [0, 0, 0, 0, 0, 0, 0, 0, 0],
+				age: [0, 0, 0, 0, 0, 0, 0, 0, 0],
+			};
+
+			function step() {
+				for (var rep = 0; rep < 1; rep++) {
+					var alive = 0;
+					if (!(stepCount % graphInterval)) {
+						maxAge = 0;
+						stats = {
+							neighbors: [0, 0, 0, 0, 0, 0, 0],
+							age: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+						};
+					}
+					var n, s, a;
+					for (var x = 0; x < width; x++) {
+						for (var y = 0; y < height; y++) {
+							n = getNeighbors(which, x, y);
+							s = arrays[which][x][y] ? 1 : 0;
+							if (Math.random() < probabilities[n][s]) {
+								arrays[1 - which][x][y] = s ? State.Dead : State.Alive;
+							} else {
+								arrays[1 - which][x][y] = s ? (arrays[which][x][y] + 1) : State.Dead;
+							}
+							if (arrays[1 - which][x][y]) {
+								alive++;
+							}
+							if (!(stepCount % graphInterval)) {
+								if (arrays[1 - which][x][y]) {
+									stats.neighbors[getNeighbors(1 - which, x, y)]++;
+									if (arrays[1 - which][x][y] > maxAge) {
+										maxAge = arrays[1 - which][x][y];
+									}
+									a = Math.floor((arrays[1 - which][x][y] - 1) / 25);
+									if (a > 9) {
+										a = 9;
+									}
+									stats.age[a]++;
+								}
+							}
+						}
+					}
+					which = 1 - which;
+					stepCount++;
+				}
+				if (!(stepCount % graphInterval)) {
+					showGraphs(stats);
+					el.status.step.text("Step " + stepCount + ", ");
+					el.status.alive.text(alive + " cells alive.");
+				}
+				blitter.blit(arrays[1 - which]);
+
+				if (running) {
+					setTimeout(step, stepInterval);
+				}
+			}
+
+			var running = false;
+			stepInterval = 10;
+
+			buttons.step.click(function() {
+				if (!running) {
+					setTimeout(step, 1);
+				}
+			});
+			buttons.start.click(function() {
+				running = true;
+				setTimeout(step, stepInterval);
+			});
+			buttons.stop.click(function() {
+				running = false;
+			});
+			buttons.random.click(function() {
+				for (var x = 0; x < width; x++) {
+					arrays[0][x] = [];
+					arrays[1][x] = [];
+					for (var y = 0; y < height; y++) {
+						arrays[0][x][y] = Math.random() < 0.5 ? State.Alive : State.Dead;
+						arrays[1][x][y] = Math.random() < 0.5 ? State.Alive : State.Dead;
+					}
+				}
+				blitter.blit(arrays[which]);
+			});
+			buttons.reverse.click(function() {
+				reverseColors = !reverseColors;
+				blitter.blit(arrays[which]);
+			});
+			buttons.dump.click(function() {
+				el.dump.show();
+				var s = "{";
+				for (var x in arrays[which]) {
+					if (x > 0) {
+						s += ",";
+					}
+					s += "{";
+					for (var y in arrays[which][x]) {
+						if (y > 0) {
+							s += ",";
+						}
+						s += arrays[which][x][y];
+					}
+					s += "}\n";
+				}
+				s += "}";
+				el.dumpArea.text(s);
+			});
+			buttons.clear.click(function() {
+				for (var x = 0; x < width; x++) {
+					for (var y = 0; y < height; y++) {
+						arrays[0][x][y] = 0;
+						arrays[1][x][y] = 0;
+					}
+				}
+				if (running) {
+					running = false;
+				}
+				blitter.blit(arrays[which]);
+			});
+			
+
+			return {
+				getNode: function() { return node; },
+			};
+		}
+
+
+		var root = $('body');
+
+		LifeGame().getNode().appendTo(root);
+
+
+
+
+
+
+
+
+
+
+		});
+		</script>
+	</head>
+	<body>
+	</body>
+</html>
+		
+		
+		
+		
+		
+		
+		
+		
+		
+		
+		
+		

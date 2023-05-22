@@ -1,0 +1,10 @@
+{
+  "name": "Stochastic Life",
+  "description": "Conway's Game of Life ... Stochastically.",
+  "version": "0.1",
+  "app": {
+    "launch": {
+      "local_path": "sl.html"
+    }
+  }
+ }
